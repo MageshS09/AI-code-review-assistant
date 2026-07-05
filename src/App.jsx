@@ -20,6 +20,13 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState(null)
+  const [copied, setCopied] = useState(false)
+
+  const handleCopyRefactored = async () => {
+    await navigator.clipboard.writeText(result.refactored_code)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   const handleLanguageChange = (nextLanguage) => {
     setLanguage(nextLanguage)
@@ -144,7 +151,15 @@ export default function App() {
               </div>
 
               <div>
-                <h3 className="mb-2 text-sm font-semibold text-slate-200">Refactored code</h3>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-200">Refactored code</h3>
+                  <button
+                    onClick={handleCopyRefactored}
+                    className="rounded-md border border-emerald-900/50 bg-[#0d1512] px-2.5 py-1 text-xs font-medium text-slate-200 hover:border-emerald-500/60 hover:text-emerald-300"
+                  >
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
                 <div className="overflow-hidden rounded-md border border-emerald-900/40">
                   <CodeMirror
                     value={result.refactored_code}
