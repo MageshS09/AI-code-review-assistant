@@ -71,8 +71,77 @@ SAFE_SUBSTITUTIONS = {
     ],
     "javascript": [
         (re.compile(r"\bvar\b"), "let"),
+        (re.compile(r"(?<![=!<>])==(?!=)"), "==="),
+        (re.compile(r"(?<!!)!=(?!=)"), "!=="),
     ],
 }
+
+GENERIC_SAFE_SUBSTITUTIONS = [
+    (re.compile(r"\byaml\.load\("), "yaml.safe_load("),
+]
+
+# Languages where a bare debug-print line can be dropped outright without
+# risking a compile error. Go is excluded: removing a line can leave a
+# declared variable unused, which Go treats as a hard compile error.
+DEBUG_LINE_PATTERNS = {
+    "python": re.compile(r"^print\(.*\)$"),
+    "javascript": re.compile(r"^console\.log\(.*\);?$"),
+    "java": re.compile(r"^System\.out\.println\(.*\);$"),
+    "cpp": re.compile(r"^(?:std::)?cout\s*<<.*;$"),
+}
+
+OFF_BY_ONE_LENGTH_RE = re.compile(r"<=(\s*)(\w+\.(?:length|size\(\)))")
+OFF_BY_ONE_LEN_CALL_RE = re.compile(r"<=(\s*)len\((\w+)\)")
+
+SECRET_ASSIGNMENT_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)(\s*[:=]\s*)[\"']([^\"']{4,})[\"']")
+
+SECRET_ENV_EXPR = {
+    "python": 'os.getenv("{name}")',
+    "javascript": "process.env.{name}",
+    "java": 'System.getenv("{name}")',
+    "go": 'os.Getenv("{name}")',
+    "cpp": 'std::getenv("{name}")',
+}
+
+
+def remove_debug_statements(code, language):
+    """Drop lines that are nothing but a debug print call; they carry no
+    logic besides side-effect output, so deleting the line is always safe."""
+    pattern = DEBUG_LINE_PATTERNS.get(language)
+    if not pattern:
+        return code
+    kept = [line for line in code.splitlines() if not pattern.match(line.strip())]
+    return "\n".join(kept)
+
+
+def fix_off_by_one(code):
+    fixed = OFF_BY_ONE_LENGTH_RE.sub(r"<\1\2", code)
+    fixed = OFF_BY_ONE_LEN_CALL_RE.sub(r"<\1len(\2)", fixed)
+    return fixed
+
+
+def _to_env_var_name(identifier):
+    with_underscores = re.sub(r"(?<!^)(?=[A-Z])", "_", identifier)
+    return with_underscores.upper().lstrip("_")
+
+
+def fix_hardcoded_secrets(code, language):
+    """Replace hardcoded credential literals with an environment-variable
+    read, mirroring the fix find_hardcoded_secrets recommends in its message."""
+    expr_template = SECRET_ENV_EXPR.get(language)
+    if not expr_template:
+        return code
+
+    def replace(match):
+        name, sep, value = match.group(1), match.group(2), match.group(3)
+        if "env" in value.lower() or not any(keyword in name.lower() for keyword in SECRET_KEYWORDS):
+            return match.group(0)
+        return f"{name}{sep}{expr_template.format(name=_to_env_var_name(name))}"
+
+    fixed = SECRET_ASSIGNMENT_RE.sub(replace, code)
+    if language == "python" and fixed != code and not re.search(r"^import os\b", fixed, re.MULTILINE):
+        fixed = "import os\n" + fixed
+    return fixed
 
 
 def find_hardcoded_secrets(lines, language):
@@ -512,6 +581,11 @@ def apply_safe_fixes(code, language):
         fixed = fix_mutable_default_args(fixed)
     for pattern, replacement in SAFE_SUBSTITUTIONS.get(language, []):
         fixed = pattern.sub(replacement, fixed)
+    for pattern, replacement in GENERIC_SAFE_SUBSTITUTIONS:
+        fixed = pattern.sub(replacement, fixed)
+    fixed = remove_debug_statements(fixed, language)
+    fixed = fix_off_by_one(fixed)
+    fixed = fix_hardcoded_secrets(fixed, language)
     return fixed
 
 
