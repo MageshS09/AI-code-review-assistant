@@ -15,7 +15,7 @@ export default function FindingsList({ title, items }) {
       ) : (
         <ul className="space-y-2">
           {items.map((item, i) => (
-            <li key={i} className="flex items-start gap-2 rounded-md bg-slate-900/60 p-2.5 text-sm">
+            <li key={i} className="flex items-start gap-2 rounded-md bg-emerald-950/20 p-2.5 text-sm">
               <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${SEVERITY_BADGE[item.severity] || SEVERITY_BADGE.low}`}>
                 {item.severity}
               </span>
