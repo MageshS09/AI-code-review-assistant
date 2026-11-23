@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
@@ -7,21 +9,40 @@ MAX_CODE_LENGTH = 20000
 SUPPORTED_LANGUAGES = {"python", "javascript", "cpp", "java", "go"}
 
 app = Flask(__name__)
-CORS(app)
+
+# Same-origin deployments (Vite dev proxy, Vercel) need no CORS at all. When the
+# frontend is hosted elsewhere, set CORS_ORIGINS to a comma-separated allow-list.
+# The default of "*" keeps the previous open behaviour.
+_cors_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
+CORS(app, origins=_cors_origins or "*")
+
+
+def _bad_request(message):
+    return jsonify({"error": message}), 400
 
 
 @app.post("/api/review")
 def review_code():
-    payload = request.get_json(silent=True) or {}
-    code = (payload.get("code") or "").strip()
-    language = (payload.get("language") or "").strip().lower()
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return _bad_request("Request body must be a JSON object with 'code' and 'language'.")
+
+    raw_code = payload.get("code")
+    raw_language = payload.get("language")
+    if raw_code is not None and not isinstance(raw_code, str):
+        return _bad_request("'code' must be a string.")
+    if raw_language is not None and not isinstance(raw_language, str):
+        return _bad_request("'language' must be a string.")
+
+    code = (raw_code or "").strip()
+    language = (raw_language or "").strip().lower()
 
     if not code:
-        return jsonify({"error": "Code input cannot be empty."}), 400
+        return _bad_request("Code input cannot be empty.")
     if language not in SUPPORTED_LANGUAGES:
-        return jsonify({"error": f"Unsupported language '{language}'."}), 400
+        return _bad_request(f"Unsupported language '{language}'.")
     if len(code) > MAX_CODE_LENGTH:
-        return jsonify({"error": f"Code exceeds the {MAX_CODE_LENGTH} character limit."}), 400
+        return _bad_request(f"Code exceeds the {MAX_CODE_LENGTH} character limit.")
 
     # Currently analyzed locally with rule-based heuristics (analyzer.py), no
     # external API calls. Swap this for a Claude API call later by replacing
@@ -37,4 +58,10 @@ def health_check():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # The Werkzeug debugger allows arbitrary code execution, so debug mode and
+    # binding to all interfaces are opt-in instead of the default.
+    app.run(
+        host=os.getenv("FLASK_HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "5000")),
+        debug=os.getenv("FLASK_DEBUG", "0") == "1",
+    )

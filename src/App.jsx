@@ -47,9 +47,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, language }),
       })
-      const data = await response.json()
+      // A gateway/server failure may return HTML instead of JSON.
+      const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(data.error || 'Review request failed.')
+        throw new Error(data.error || `Review request failed (HTTP ${response.status}).`)
       }
       setResult(data)
     } catch (err) {

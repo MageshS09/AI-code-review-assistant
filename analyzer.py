@@ -61,6 +61,13 @@ FUNCTION_DEF_PATTERNS = {
     "go": r"func\s+(\w+)\s*\(",
 }
 
+# Names the brace-language function regexes can match by accident, e.g. the
+# "else if (...) {" in an if/else chain, which is not a function definition.
+NON_FUNCTION_KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "else", "do", "sizeof"}
+
+DIVISION_BY_LENGTH_RE = re.compile(r"/\s*len\(|/\s*\w+\.length\b|/\s*\w+\.size\(\)")
+GUARD_KEYWORD_RE = re.compile(r"\b(if|unless)\b|\?")
+
 SEVERITY_WEIGHTS = {"high": 3.0, "medium": 1.5, "low": 0.5}
 
 SAFE_SUBSTITUTIONS = {
@@ -104,14 +111,43 @@ SECRET_ENV_EXPR = {
 }
 
 
+def _indent_of(line):
+    return len(line) - len(line.lstrip())
+
+
 def remove_debug_statements(code, language):
     """Drop lines that are nothing but a debug print call; they carry no
-    logic besides side-effect output, so deleting the line is always safe."""
+    logic besides side-effect output, so deleting the line is safe.
+
+    In Python a removed line can be the only statement in its block, which
+    would leave an empty block (a SyntaxError). In that case a ``pass`` is
+    left in its place so the refactored code still parses.
+    """
     pattern = DEBUG_LINE_PATTERNS.get(language)
     if not pattern:
         return code
-    kept = [line for line in code.splitlines() if not pattern.match(line.strip())]
-    return "\n".join(kept)
+
+    kept = []  # (line, was_debug_line)
+    for line in code.splitlines():
+        kept.append((line, bool(pattern.match(line.strip()))))
+
+    result = []
+    for idx, (line, is_debug) in enumerate(kept):
+        if not is_debug:
+            result.append(line)
+            continue
+        if language != "python":
+            continue
+        # Does a surviving statement remain in this block after removal?
+        indent = _indent_of(line)
+        block_opener = next((l for l in reversed(result) if l.strip()), None)
+        opens_block = block_opener is not None and block_opener.rstrip().endswith(":") and _indent_of(block_opener) < indent
+        if not opens_block:
+            continue
+        next_line = next((l for l, d in kept[idx + 1 :] if l.strip() and not d), None)
+        if next_line is None or _indent_of(next_line) < indent:
+            result.append(" " * indent + "pass")
+    return "\n".join(result)
 
 
 def fix_off_by_one(code):
@@ -168,15 +204,16 @@ def find_sql_injection(lines, language):
     findings = []
     for idx, line in enumerate(lines, start=1):
         lowered = line.lower()
-        if any(keyword in lowered for keyword in SQL_KEYWORDS) and ('"' in line or "'" in line):
-            if "+" in line or "%" in line or "format(" in lowered or "f'" in lowered or 'f"' in lowered or "${" in line:
-                findings.append(
-                    {
-                        "line": idx,
-                        "description": "SQL string appears to be built via concatenation/interpolation. Use parameterized queries to prevent SQL injection.",
-                        "severity": "high",
-                    }
-                )
+        has_sql = any(keyword in lowered for keyword in SQL_KEYWORDS) and ('"' in line or "'" in line)
+        interpolated = "+" in line or "%" in line or "format(" in lowered or "f'" in lowered or 'f"' in lowered or "${" in line
+        if has_sql and interpolated:
+            findings.append(
+                {
+                    "line": idx,
+                    "description": "SQL string appears to be built via concatenation/interpolation. Use parameterized queries to prevent SQL injection.",
+                    "severity": "high",
+                }
+            )
     return findings
 
 
@@ -214,6 +251,7 @@ def _check_javascript_syntax(code):
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return []
@@ -298,7 +336,7 @@ def find_bugs(lines, language):
                 }
             )
 
-        if re.search(r"/\s*len\(|/\s*\w+\.length\b|/\s*\w+\.size\(\)", line) and "if" not in stripped.lower():
+        if DIVISION_BY_LENGTH_RE.search(line) and not GUARD_KEYWORD_RE.search(line):
             findings.append(
                 {
                     "line": idx,
@@ -364,7 +402,8 @@ def estimate_function_spans(lines, language):
         return spans
 
     for i, line in enumerate(lines):
-        if not re.search(func_regex, line):
+        match = re.search(func_regex, line)
+        if not match or match.group(1) in NON_FUNCTION_KEYWORDS:
             continue
         depth = line.count("{") - line.count("}")
         end = i
@@ -481,7 +520,7 @@ def _detect_recursion(code, language):
     max_calls = 0
     for match in re.finditer(pattern, code):
         name = match.group(1)
-        if not name:
+        if not name or name in NON_FUNCTION_KEYWORDS:
             continue
         window = code[match.end() : match.end() + 2000]
         call_count = len(re.findall(rf"\b{re.escape(name)}\s*\(", window))
