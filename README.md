@@ -53,7 +53,7 @@ Quick feedback on a snippet usually means setting up a linter per language or wa
 | Backend | Python, Flask 3.0.3, Flask-CORS 4.0.1 |
 | Analysis | Python standard library (`re`, `ast`, `subprocess`); optional Node.js for JS syntax checks |
 | Frontend | React 18, Vite 5, Tailwind CSS 3, `@uiw/react-codemirror`, Recharts |
-| Testing | pytest |
+| Testing | pytest, Vitest, Testing Library |
 | Deployment config | Vercel (`vercel.json`: `@vercel/python` + `@vercel/static-build`) |
 
 ## System Architecture
@@ -91,6 +91,7 @@ In development, Vite proxies `/api` to `http://localhost:5000` (`vite.config.js`
 │   ├── SeverityChart.jsx   # Severity chart
 │   ├── Logo.jsx
 │   ├── languages.js        # Language list, CodeMirror extensions, sample code
+│   ├── *.test.js(x)        # Vitest tests (languages, FindingsList)
 │   ├── main.jsx
 │   └── index.css
 ├── public/favicon.svg
@@ -100,12 +101,13 @@ In development, Vite proxies `/api` to `http://localhost:5000` (`vite.config.js`
 ├── tailwind.config.js
 ├── postcss.config.js
 ├── vercel.json             # Vercel build and routing
+├── .github/workflows/ci.yml  # CI: pytest, Vitest, frontend build
 └── .env.example            # Optional environment variables
 ```
 
 ## Prerequisites
 
-- Python 3 (tested with 3.13)
+- Python 3 (tested with 3.13; CI uses 3.12)
 - Node.js 18+ and npm (for the frontend; Node on the API host also enables JavaScript syntax checking)
 
 ## Installation
@@ -190,7 +192,15 @@ Returns `{"status": "ok"}`.
 python -m pytest
 ```
 
-The suite covers each detector, the auto-fixers (including regression tests for the cases listed in the changelog below), the complexity estimator, scoring, and the API's validation behaviour.
+Frontend tests (Vitest + Testing Library):
+
+```bash
+npm test
+```
+
+CI (`.github/workflows/ci.yml`) runs `pytest`, `npm test` and `npm run build` on pushes to `main` and on pull requests.
+
+The Python suite covers each detector, the auto-fixers (including regression tests for the cases listed in the changelog below), the complexity estimator, scoring, and the API's validation behaviour.
 
 ## Example Usage
 
@@ -228,7 +238,7 @@ This reports a high-severity hardcoded credential, a high-severity mutable defau
 - Optional LLM-backed review behind the existing `analyze_code` interface (the hook point is commented in `app.py`).
 - AST-based analysis for more languages (for example `tree-sitter`).
 - Rate limiting and authentication for public deployments.
-- Frontend tests and CI to run `pytest` and `npm run build` on each push.
+- Frontend tests for `App.jsx` and `SeverityChart.jsx` (only `FindingsList` and `languages.js` are covered today).
 
 ## Contributing
 
